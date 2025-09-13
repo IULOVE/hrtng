@@ -1,5 +1,5 @@
 /*
-    Copyright © 2017-2024 AO Kaspersky Lab
+    Copyright © 2017-2025 AO Kaspersky Lab
 
     This program is free software: you can redistribute it and/or modify
     it under the terms of the GNU General Public License as published by
@@ -19,7 +19,7 @@
 
 #pragma once
 bool deinline(mbl_array_t *mba);
-void deinline_reset(mbl_array_t *mba);
+void deinline_reset(ea_t entry_ea);
 void deinline_reset(vdui_t *vu, bool closeWnd);
 bool hasInlines(vdui_t *vu, bool* bEnabled);
 bool is_nlib_inline(vdui_t *vu);

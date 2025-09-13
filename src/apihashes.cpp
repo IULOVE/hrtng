@@ -1,5 +1,5 @@
 /*
-    Copyright © 2016-2024 AO Kaspersky Lab.
+    Copyright © 2016-2025 AO Kaspersky Lab.
 
     This program is free software: you can redistribute it and/or modify
     it under the terms of the GNU General Public License as published by
@@ -276,7 +276,7 @@ static ssize_t idaapi make_code_callback(va_list va)
 		hash_t opValue = cmdP->ops[idx].value;
 		auto it = hashes.find(opValue);
 		if(it != hashes.end()) {
-			msg("[hrt] %a: Found API hash for %s\n", ea, it->second.c_str());
+			Log(llInfo, "%a: Found API hash for %s\n", ea, it->second.c_str());
 			set_cmt(ea, it->second.c_str(), false);
 			break;
 		}
@@ -310,7 +310,7 @@ static ssize_t idaapi make_data_callback(va_list va)
 
 	auto it = hashes.find(opValue);
 	if(it != hashes.end()) {
-		msg("[hrt] %a: Found API hash for %s\n", ea, it->second.c_str());
+		Log(llInfo, "%a: Found API hash for %s\n", ea, it->second.c_str());
 		if (!set_name(ea, it->second.c_str(), SN_NOCHECK | SN_NOWARN | SN_FORCE)) {
 			set_cmt(ea, it->second.c_str(), true);
 		}
@@ -322,9 +322,9 @@ static ssize_t idaapi make_data_callback(va_list va)
 
 //--------------------------------------------------------------------------
 // This callback is called for IDP notification events
-static ssize_t idaapi make_callback(void * /*user_data*/, int event_id, va_list va)
+MY_DECLARE_LISTENER(make_callback)
 {
-	switch(event_id)
+	switch(ncode)
 	{
 	case idb_event::make_code:
 		return make_code_callback(va);
@@ -354,20 +354,42 @@ struct ida_local ah_visitor_t : public ctree_visitor_t
 			func->save_user_cmts();
 		user_cmts_free(cmts);
 	}
+	void chkVal(hash_t val, citem_t *expr)
+	{
+		if(val) {
+			auto it = hashes.find(val);
+			if(it != hashes.end()) {
+				Log(llInfo, "%a: Found API hash %" FMT_64 "x for %s\n", expr->ea, it->first, it->second.c_str());
+				cmtModified |= setComment4Exp(func, cmts, expr, it->second.c_str());
+			}
+		}
+	}
 	virtual int idaapi visit_expr(cexpr_t *expr)
 	{
-		if(expr->op == cot_num && expr->n->nf.org_nbytes >= 4) {
-			hash_t val = expr->numval();
-			if(val) {
-				auto it = hashes.find(val);
-				if(it != hashes.end()) {
-					msg("[hrt] %a: Found API hash %" FMT_64 "x for %s\n", expr->ea, it->first, it->second.c_str());
-					cmtModified |= setComment4Exp(func, cmts, expr, it->second.c_str());
-				}
+		if(expr->op == cot_num) {
+			hash_t v = expr->n->_value;
+			switch(expr->n->nf.org_nbytes) {
+			case 4:
+				v = HASH32to64(v);
+				//pass down
+			case 8:
+				chkVal(v, expr);
+				break;
 			}
 		}
 		return 0;
 	}
+	virtual int idaapi visit_insn(cinsn_t *insn)
+	{
+		if(insn->op == cit_switch) {
+			ccases_t &cases = insn->cswitch->cases;
+			for(size_t i = 0; i < cases.size(); i++)
+				for(size_t j = 0; j < cases[i].size(); j++)
+					chkVal(cases[i].value((int)j), &cases[i]);
+		}
+		return 0;
+	}
+
 };
 
 static bool bApihashesInited = false;
@@ -439,7 +461,7 @@ void apihashes_init()
 		return;
 	}
 
-	show_wait_box("Calculating...");
+	show_wait_box("[hrt] Calculating...");
 	hashes.clear();
 	qstring dllName;
 	bool bNextIsDll = true;
@@ -466,11 +488,11 @@ void apihashes_init()
 			bNextIsDll = false;
 		}
 		hash_t hash = hashers[alg].HashFunctionPtr(dllName.c_str(), buf, basis, prime);
-		//msg("[hrt] %" FMT_64 "x %s\n", (int64)hash, buf);
+		Log(llFlood, "hash %" FMT_64 "x %s\n", (int64)hash, buf);
 
 		auto it = hashes.find(hash);
 		if(it != hashes.end() && strcmp(it->second.c_str(), buf)) {
-			msg("[hrt] hash collision %" FMT_64 "x '%s' and '%s'\n", (int64)hash, it->second.c_str(), buf);
+			Log(llWarning, "hash collision %" FMT_64 "x '%s' and '%s'\n", (int64)hash, it->second.c_str(), buf);
 			++collisions;
 		} else {
 			hashes[hash] = buf;
@@ -481,10 +503,10 @@ void apihashes_init()
 		}
 	}
 	hide_wait_box();
-	msg("[hrt] %d lines, %d hashes, %d collisions\n", lines, (int)hashes.size(), collisions);
+	Log(llNotice, "%d lines, %d hashes, %d collisions\n", lines, (int)hashes.size(), collisions);
 
 	if(!bApihashesInited) {
-		hook_to_notification_point(HT_IDB, make_callback);
+		HOOK_CB(HT_IDB, make_callback);
 		bApihashesInited = true;
 	}
 }
@@ -493,7 +515,7 @@ void apihashes_init()
 void apihashes_done()
 {
 	if(bApihashesInited) {
-		unhook_from_notification_point(HT_IDB, make_callback);
+		UNHOOK_CB(HT_IDB, make_callback);
 		hashes.clear();
 		bApihashesInited = false;
 	}

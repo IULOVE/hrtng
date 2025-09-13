@@ -1,5 +1,5 @@
 /*
-    Copyright © 2017-2024 AO Kaspersky Lab
+    Copyright © 2017-2025 AO Kaspersky Lab
 
     This program is free software: you can redistribute it and/or modify
     it under the terms of the GNU General Public License as published by
@@ -20,6 +20,9 @@
 /*
 	This feature is inspired by ideas of GraphSlick plugin(https://github.com/lallousx86/GraphSlick)
 */
+
+//set 1 to enable automatic inlines detection like in GraphSlick (https://github.com/lallousx86/GraphSlick)
+#define ENABLE_FIND_MATCHED_PATHS 0
 
 #include "warn_off.h"
 #include <hexrays.hpp>
@@ -86,7 +89,7 @@ typedef std::pair<bbs_t::iterator, bool> bbsIns_t;    // bbs_t insertion result
 typedef qvector<bbs_t>                   fmtch_t;     // groups of freq matched blocks
 typedef std::pair<sBB*, sBB*>            twoBB_t;     // head/exit pair or parts of two paths in pathsStk_t
 typedef std::stack<twoBB_t>              pathsStk_t;  // temporary stack for building paths
-typedef std::basic_string<uint32>        pathstr_t;   // group numbers in path
+typedef std::basic_string<char32_t>      pathstr_t;   // group numbers in path
 
 class ida_local lessPSLen {
 public:
@@ -178,7 +181,7 @@ struct ida_local sBB {
 	{
 		if (succs.size() != bb->succs.size()) {
 #if DEBUG_DI > 3
-			msg("[hrt] !match %a vs %a = !nsuccs\n", bgn, bb->bgn);
+			Log(llFlood, "!match %a vs %a = !nsuccs\n", bgn, bb->bgn);
 #endif
 			return false;
 		}
@@ -189,7 +192,7 @@ struct ida_local sBB {
 			uint32 lenDiff = static_cast<uint32>(std::abs(static_cast<int32>(instCnt - bb->instCnt))) * 100 / minCnt;
 				if (lenDiff > 100) {
 #if DEBUG_DI > 3
-					msg("[hrt] !match %a vs %a = lenDiff %d%%\n", bgn, bb->bgn, lenDiff);
+					Log(llFlood, "!match %a vs %a = lenDiff %d%%\n", bgn, bb->bgn, lenDiff);
 #endif
 					return false;
 			}
@@ -234,7 +237,7 @@ struct ida_local sBB {
 		}
 		if (!common) {
 #if DEBUG_DI > 3
-			msg("[hrt] !match %a vs %a = no common\n", bgn, bb->bgn );
+			Log(llFlood, "!match %a vs %a = no common\n", bgn, bb->bgn );
 #endif
 			return false;
 		}
@@ -244,10 +247,10 @@ struct ida_local sBB {
 		bool res = cps > coverPerc && cpb > coverPerc && tp / common >= 90;
 		//bool res = cps > coverPerc && (relaxed || (cpb > coverPerc && tp / common >= 90));
 #if DEBUG_DI > 3
-		msg("[hrt] %smatch %a vs %a = %d(%d) %d(%d) (%d) %d\n", res ? "" : "!", bgn, bb->bgn, cps, ics, cpb, icb, coverPerc, tp / common);
+		Log(llFlood, "%smatch %a vs %a = %d(%d) %d(%d) (%d) %d\n", res ? "" : "!", bgn, bb->bgn, cps, ics, cpb, icb, coverPerc, tp / common);
 #elif DEBUG_DI > 2
 		if (!res && cps > coverPerc - 10 && cpb > coverPerc - 10 && tp / common >= 80) {
-			msg("[hrt] !match %a vs %a = %d %d (%d) %d\n", bgn, bb->bgn, cps, cpb, coverPerc, tp / common);
+			Log(llFlood, "!match %a vs %a = %d %d (%d) %d\n", bgn, bb->bgn, cps, cpb, coverPerc, tp / common);
 		}
 #endif
 		return res;
@@ -512,11 +515,11 @@ public:
 				exit = bb;
 		}
 		if (!head) {
-			msg("[hrt] No head block found for inline applicant %a-%a\n", head_ea, exit_ea);
+			Log(llError, "No head block found for inline applicant %a-%a\n", head_ea, exit_ea);
 			return false;
 		}
 		if (!exit) {
-			msg("[hrt] No exit block found for inline applicant %a-%a\n", head_ea, exit_ea);
+			Log(llError, "No exit block found for inline applicant %a-%a\n", head_ea, exit_ea);
 			return false;
 		}
 		qstring errorStr;
@@ -529,7 +532,7 @@ public:
 			const uchar* ptr = &buf[0];
 			deserialize(&ptr, &buf[buf.size()]);
 		} else {
-			msg("[hrt] Inline applicant %a-%a error:%s\n", head_ea, exit_ea, errorStr.c_str());
+			Log(llError, "Inline applicant %a-%a error:%s\n", head_ea, exit_ea, errorStr.c_str());
 		}
 		return res;
 	}
@@ -667,9 +670,9 @@ public:
 					path.append(", ");
 				path.cat_sprnt("%a", (*n)->bgn);
 			}
-			msg("[hrt] %s %a-%a (%ui/%db): %s\n", m.c_str(), front()->bgn, exit ? exit->bgn : BADADDR, instCnt, (int)size(), path.c_str());
+			Log(llDebug, "%s %a-%a (%ui/%db): %s\n", m.c_str(), front()->bgn, exit ? exit->bgn : BADADDR, instCnt, (int)size(), path.c_str());
 		} else {
-			msg("[hrt] %s None-%a empty-path\n", m.c_str(), exit ? exit->bgn : BADADDR);
+			Log(llDebug, "%s None-%a empty-path\n", m.c_str(), exit ? exit->bgn : BADADDR);
 		}
 	}
 #else
@@ -738,12 +741,13 @@ struct ida_local sInlinesLib : std::set<sInline*, lessInline>
 		qstring	basePath = get_user_idadir();
 		basePath.append("/inlines");
 		if (bCreate) {
-			if (!qfileexist(basePath.c_str())) {
+			if(!qisdir(basePath.c_str())) {
 #ifdef _WIN32
-				qmkdir(basePath.c_str(), 0);
+				if(qmkdir(basePath.c_str(), 0) < 0)
 #else
-				qmkdir(basePath.c_str(), S_IRWXU | S_IRWXG | S_IROTH | S_IXOTH);
-#endif			
+				if(qmkdir(basePath.c_str(), S_IRWXU | S_IRWXG | S_IROTH | S_IXOTH) < 0)
+#endif
+					Log(llError, "Error %d on mkdir(\"%s\")\n", get_qerrno(), basePath.c_str());
 			}
 		}
 		return basePath;
@@ -752,6 +756,7 @@ struct ida_local sInlinesLib : std::set<sInline*, lessInline>
 	{
 		qstring	basePath = getBasePath(true);
 		basePath.append('/');
+		uint32 cnt = 0;
 		for (auto it = begin(); it != end(); it++) {
 			sInline *inl = *it;
 			if (inl->bLib || inl->bTmp)
@@ -785,34 +790,35 @@ struct ida_local sInlinesLib : std::set<sInline*, lessInline>
 					//	path[i] = qtolower(path[i]);
 					qstring dir = basePath + path.substr(0, p);
 #ifdef _WIN32
-					qmkdir(dir.c_str(), 0);
+					if(qmkdir(dir.c_str(), 0) < 0)
 #else
-					qmkdir(dir.c_str(), S_IRWXU | S_IRWXG | S_IROTH | S_IXOTH);
+					if(qmkdir(dir.c_str(), S_IRWXU | S_IRWXG | S_IROTH | S_IXOTH) < 0)
 #endif
+						Log(llError, "Error %d on mkdir(\"%s\")\n", get_qerrno(), basePath.c_str());
 					path[p] = '/';
 					pdir = p + 1;
 					break;
 				}
 				}
 			}
-			qstring fullpath;
-			qstring basename = path;
-			for (int i = 0; i >= 0; i++) {
-				fullpath = basePath + path + ".inl";
-				if (!qfileexist(fullpath.c_str()))
-					break;
-				path = basename;
-				path.cat_sprnt("_%d", i + 1);
-			}
+			qstring fullpath(basePath); fullpath.append(path);
+			fullpath = unique_name(fullpath.c_str(), "-", [](const qstring& n) {qstring p(n); p.append(".inl"); return !qfileexist(p.c_str()); });
+			fullpath.append(".inl");
 			FILE *fd = qfopen(fullpath.c_str(), "wb");
-			if(fd) {
+			if(!fd) {
+				Log(llError, "Could not open '%s' for writing!\n", fullpath.c_str());
+			} else {
 				bytevec_t buf;
 				inl->serialize(buf);
 				qfwrite(fd, &buf[0], buf.size());
 				qfclose(fd);
 				inl->bLib = true;
+				Log(llFlood, "inline '%s' saved in file:'%s'\n", inl->name.c_str(), fullpath.c_str());
+				++cnt;
 			}
 		}
+		if(cnt)
+			Log(llNotice, "%d inlines saved\n", cnt);
 	}
 	static void loadInlines(const char *dir, sInlinesLib* il)
 	{
@@ -827,7 +833,10 @@ struct ida_local sInlinesLib : std::set<sInline*, lessInline>
 			if (0 != (blk.ff_attrib & FA_DIREC)) {
 				if(blk.ff_name[0] != '.')
 					loadInlines(fname.c_str(), il);
-			} else if (!qstrcmp(get_file_ext(fname.c_str()), "inl")) {
+			} else {
+				const char *ext = get_file_ext(fname.c_str());
+				if(!ext || qstrcmp(ext, "inl"))
+					continue;
 				FILE* fd = qfopen(fname.c_str(), "rb");
 				if (fd) {
 					bytevec_t buf;
@@ -846,8 +855,9 @@ struct ida_local sInlinesLib : std::set<sInline*, lessInline>
 					const uchar* ptr = &buf[0];
 					if (buf.size() > 10 && inlin->deserialize(&ptr, &buf[buf.size()])) {
 						il->insert(inlin);
+						Log(llFlood, "inline '%s' loaded\n", inlin->name.c_str());
 					} else {
-						msg("[hrt] broken inline '%s' in file:'%s'\n", inlin->name.c_str(), fname.c_str());
+						Log(llError, "broken inline '%s' in file:'%s'\n", inlin->name.c_str(), fname.c_str());
 						delete inlin;
 					}
 				}
@@ -860,7 +870,7 @@ struct ida_local sInlinesLib : std::set<sInline*, lessInline>
 		qstring	basePath = getBasePath();
 		loadInlines(basePath.c_str(), this);
 		if(size())
-			msg("[hrt] %d inlines are loaded\n", (int)size());
+			Log(llNotice, "%d inlines are loaded\n", (int)size());
 	}
 };
 
@@ -908,7 +918,7 @@ bool sInline::create_from_whole_mba(mbl_array_t *mba, const char* name_, qstring
 			continue;
 		if (!inlinesLib.has(nam.c_str()))
 			break;
-		msg("[hrt] inline '%s' already exist\n", nam.c_str());
+		Log(llError, "inline '%s' already exist\n", nam.c_str());
 	}
 
 	upd_comment(path.front()->bgn, path.exit->bgn);
@@ -1158,7 +1168,7 @@ struct ida_local sBBGrpMatcher {
 		if (!samePaths.size())
 			return;
 #if DEBUG_DI
-		msg("[hrt] found %d similar paths\n", (int)samePaths.size());
+		Log(llDebug, "found %d similar paths\n", (int)samePaths.size());
 		int idx = 0;
 		for (auto p = samePaths.begin(); p != samePaths.end(); p++) {
 			printPathStr(p->first, "%d (%d)", idx++, (int)p->second.size());
@@ -1222,7 +1232,7 @@ struct ida_local sBBGrpMatcher {
 		if (!samePaths.size())
 			return;
 #if DEBUG_DI > 1
-		msg("[hrt] after removing includes: %d similars\n", (int)samePaths.size());
+		Log(llDebug, "after removing includes: %d similars\n", (int)samePaths.size());
 		idx = 0;
 		for (auto p = samePaths.begin(); p != samePaths.end(); p++)
 			printPathStr(p->first, "%d (%d)", idx++, (int)p->second.size());
@@ -1261,7 +1271,7 @@ struct ida_local sBBGrpMatcher {
 			if(grp.size()) {
 				if((*ili)->bTmp) {
 					(*ili)->bTmp = false; //unmark temporary inlines
-					msg("[hrt] inline '%s' validated\n", (*ili)->name.c_str());
+					Log(llDebug, "inline '%s' validated\n", (*ili)->name.c_str());
 				}
 				for(auto gi = grp.begin(); gi != grp.end(); gi++)
 					for(auto i = gi->second.begin(); i != gi->second.end(); i++)
@@ -1296,11 +1306,11 @@ struct ida_local sBBGrpMatcher {
 						}
 					}
 					if(dup) {
-						msg("[hrt] %a: skip overlapped inline '%s'\n", head->bgn, i->first.c_str());
+						Log(llDebug, "%a: skip overlapped inline '%s'\n", head->bgn, i->first.c_str());
 						path.print("  ");
 						continue;
 					}
-					msg("[hrt] %a: substitute inline: %s\n", head->bgn, i->first.c_str());
+					Log(llInfo, "%a: substitute inline: %s\n", head->bgn, i->first.c_str());
 					for(auto pi = path.begin(); pi != path.end(); pi++)
 						processedBBs.add(*pi);
 
@@ -1586,7 +1596,7 @@ struct ida_local sBBGrpMatcher {
 	void printFMatches()
 	{
 		if (fmatches.size())
-			msg("[hrt] similar blocks:\n");
+			Log(llDebug, "similar blocks:\n");
 		bbs_t dupes;
 		for (size_t i = 0; i < fmatches.size(); i++) {
 			const bbs_t& grp = fmatches[i];
@@ -1598,7 +1608,7 @@ struct ida_local sBBGrpMatcher {
 				if(!result.second)
 					str.cat_sprnt("DUPEZZ! ");
 			}
-			msg("[hrt] %s\n", str.c_str());
+			Log(llDebug, "%s\n", str.c_str());
 		}
 	}
 
@@ -1611,17 +1621,17 @@ struct ida_local sBBGrpMatcher {
 		va_end(va);
 
 		qstring path = getPathStr(p);
-		msg("[hrt] %s pathstr: %s\n", m.c_str(), path.c_str());
+		Log(llDebug, "%s pathstr: %s\n", m.c_str(), path.c_str());
 	}
 
 	void printInlines()
 	{
 		if (inlines.size())
-			msg("[hrt] found inlines:\n");
+			Log(llDebug, "found inlines:\n");
 		int idx = 0;
 		for(auto i = inlines.begin(); i != inlines.end(); i++) {
 			const paths_t& grp = i->second;
-			msg("[hrt] inline%d %s (%d)\n", idx++, i->first.c_str(), (int)grp.size());
+			Log(llDebug, "inline%d %s (%d)\n", idx++, i->first.c_str(), (int)grp.size());
 			for(auto j = grp.begin(); j != grp.end(); j++) 
 				j->second.print("  ");
 		}
@@ -1638,8 +1648,10 @@ struct ida_local sBBGrpMatcher {
 		allBBs.makeCFG(mba);
 		selection2inline(mba);
 		findMatchedInlines();
-		//uncomment line below to enable automatic inlines detection like in GraphSlick (https://github.com/lallousx86/GraphSlick)
-		//findMatchedPaths();
+#if ENABLE_FIND_MATCHED_PATHS
+		//enable automatic inlines detection like in GraphSlick (https://github.com/lallousx86/GraphSlick)
+		findMatchedPaths();
+#endif
 		printInlines();
 		if (inlines.size())
 			return replaceInlines(mba);
@@ -1649,9 +1661,16 @@ struct ida_local sBBGrpMatcher {
 
 static std::map<ea_t, sBBGrpMatcher> matchers;
 static std::set<ea_t> disabled_matchers;
+static std::set<ea_t> has_inlines_cache;
 
 bool deinline(mbl_array_t *mba)
 {
+#if ENABLE_FIND_MATCHED_PATHS
+	//do not check were inlines loaded
+#else
+	if(!inlinesLib.size() && (selection_bgn == BADADDR || selection_end == BADADDR))
+		return false;
+#endif
 	if (disabled_matchers.find(mba->entry_ea) != disabled_matchers.end())
 		return false;
 	MSG_DI1(("[hrt] deinline at %d maturity\n", mba->maturity));
@@ -1663,14 +1682,17 @@ bool deinline(mbl_array_t *mba)
 		MSG_DI1(("[hrt] deinline already called\n"));
 		return false;
 	}
-	return matchers[mba->entry_ea].deinline(mba);
+	if(!matchers[mba->entry_ea].deinline(mba))
+		return false;
+	has_inlines_cache.insert(mba->entry_ea);
+	return true;
 }
 
-void deinline_reset(mbl_array_t *mba)
+void deinline_reset(ea_t entry_ea)
 {
 	//avoid dropping when showing hint for snipped started from function entry
-	if (disabled_matchers.find(mba->entry_ea) == disabled_matchers.end())
-		matchers.erase(mba->entry_ea);
+	if(disabled_matchers.find(entry_ea) == disabled_matchers.end())
+		matchers.erase(entry_ea);
 }
 
 //cleaning not more used matchers
@@ -1685,9 +1707,9 @@ void deinline_reset(vdui_t *vu, bool closeWnd)
 		}
 		return;
 	}
-	if (vdui2ea[vu] != vu->mba->entry_ea)
+	if (vdui2ea[vu] != vu->cfunc->entry_ea)
 		matchers.erase(vdui2ea[vu]);
-	vdui2ea[vu] = vu->mba->entry_ea;
+	vdui2ea[vu] = vu->cfunc->entry_ea;
 }
 
 //----------------------------------------------
@@ -1702,15 +1724,14 @@ static sBBGrpMatcher *getMatcher(ea_t ea)
 
 bool hasInlines(vdui_t *vu, bool* bEnabled)
 {
-	const sBBGrpMatcher *matcher = getMatcher(vu->mba->entry_ea);
 	bool disabled = false;
-	if (disabled_matchers.find(vu->mba->entry_ea) != disabled_matchers.end())
+	if (disabled_matchers.find(vu->cfunc->entry_ea) != disabled_matchers.end())
 		disabled = true;
 
 	if (bEnabled)
 		*bEnabled = !disabled;
 
-	return disabled || (matcher != nullptr && matcher->inlines.size());
+	return disabled || has_inlines_cache.find(vu->cfunc->entry_ea) != has_inlines_cache.end();
 }
 
 void XXable_inlines(ea_t entry_ea, bool bDisable)
@@ -1725,7 +1746,7 @@ static const path_t* getInlPath(vdui_t *vu, qstring &name)
 {
 	if (!vu->item.is_citem() || vu->item.e->op != cot_helper)
 		return nullptr;
-	const sBBGrpMatcher *matcher = getMatcher(vu->mba->entry_ea);
+	const sBBGrpMatcher *matcher = getMatcher(vu->cfunc->entry_ea);
 	if (!matcher)
 		return nullptr;
 
@@ -1763,7 +1784,7 @@ bool ren_inline(vdui_t *vu)
 {
 	if (!vu->item.is_citem() || vu->item.e->op != cot_helper)
 		return false;
-	sBBGrpMatcher *matcher = getMatcher(vu->mba->entry_ea);
+	sBBGrpMatcher *matcher = getMatcher(vu->cfunc->entry_ea);
 	if (!matcher)
 		return false;
 
@@ -1781,7 +1802,7 @@ bool ren_inline(vdui_t *vu)
 			continue;
 		if (matcher->inlines.find(newname) == matcher->inlines.end() && !inlinesLib.has(newname.c_str()))
 			break;
-		msg("[hrt] inline '%s' already exist\n", newname.c_str());
+		Log(llError, "inline '%s' already exist\n", newname.c_str());
 	} 
 
 	for (auto pi = ii->second.begin(); pi != ii->second.end(); pi++) {
@@ -1890,7 +1911,8 @@ void selection2inline(ea_t bgn, ea_t end)
 //----------------------------------------------
 void save_inlines()
 {
-	inlinesLib.save();
+	if(inlinesLib.size())
+		inlinesLib.save();
 }
 
 void deinline_init()

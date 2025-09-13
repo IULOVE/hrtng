@@ -1,5 +1,5 @@
 /*
-    Copyright © 2017-2024 AO Kaspersky Lab
+    Copyright © 2017-2025 AO Kaspersky Lab
 
     This program is free software: you can redistribute it and/or modify
     it under the terms of the GNU General Public License as published by
@@ -43,7 +43,6 @@ struct ida_local appcall_view_info_t
 appcall_view_info_t *acv = NULL;
 
 //-------------------------------------------------------------------------
-#define AST_ENABLE_ALW return AST_ENABLE_ALWAYS
 ACT_DECL(show_appcall_view, return (appcaller.funcea == BADADDR ? AST_DISABLE : AST_ENABLE))
 
 #define AST_ENABLE_FOR_ME return ((acv && ctx->widget == acv->cv) ? AST_ENABLE_FOR_WIDGET : AST_DISABLE_FOR_WIDGET)
@@ -54,7 +53,6 @@ ACT_DECL(write_cmt, AST_ENABLE_FOR_ME)
 ACT_DECL(write_ptch, AST_ENABLE_FOR_ME)
 ACT_DECL(write_2fil, AST_ENABLE_FOR_ME)
 ACT_DECL(reExecAppcall, return ((acv && ctx->widget == acv->cv && appcaller.bDbgEngine) ? AST_ENABLE_FOR_WIDGET : AST_DISABLE_FOR_WIDGET))
-#undef AST_ENABLE_ALW
 #undef AST_ENABLE_FOR_ME
 
 static const action_desc_t actions[] =
@@ -148,7 +146,7 @@ static bool idaapi write_2file(size_t start, size_t end)
 
 	FILE * file = fopenA(filename.c_str());
 	if(!file) {
-		msg("[hrt] failed open '%s'\n", filename.c_str());
+		Log(llError, "failed open '%s'\n", filename.c_str());
 		return false;
 	}
 
@@ -162,7 +160,7 @@ static bool idaapi write_2file(size_t start, size_t end)
 		}
 	}
 	qfclose(file);
-	msg("[hrt] %d decrypted strings are appended to '%s'\n", cnt, filename.c_str());
+	Log(llNotice, "%d decrypted strings are appended to '%s'\n", cnt, filename.c_str());
 	return true;
 }
 
@@ -200,7 +198,7 @@ static bool idaapi write_cmt_or_ptch(TWidget *wi, appcall_write_type wt)
 		end = pe->n;
 		if(e.x != 0)
 			end++;
-		msg("[hrt] selected(%u, %u)\n", (uint32_t)start, (uint32_t)end);
+		Log(llDebug, "selected(%u, %u)\n", (uint32_t)start, (uint32_t)end);
 	} //else no selection
 
 	switch (wt) {
@@ -270,74 +268,75 @@ static bool idaapi ct_keyboard(TWidget * /*v*/, int key, int shift, void *ud)
 }
 
 //--------------------------------------------------------------------------
-static ssize_t idaapi ui_callback(void *ud, int code, va_list va)
+MY_DECLARE_LISTENER(appcall_ui_callback)
 {
-  appcall_view_info_t *si = (appcall_view_info_t *)ud;
-  switch ( code )
-  {
-    case ui_get_custom_viewer_hint:
-      {
-			  qstring &hint = *va_arg(va, qstring *);
-			  TWidget *viewer = va_arg(va, TWidget *);
-        place_t *place         = va_arg(va, place_t *);
-        int *important_lines   = va_arg(va, int *);
-        if(si->cv == viewer) {
-          if ( place == NULL )
-            return 0;
-          simpleline_place_t *spl = (simpleline_place_t *)place;
-					if(spl->n < appcaller.calls.size()) {
-						hint = appcaller.calls[spl->n].callStr;
-						ea_t patchea = appcaller.calls[spl->n].patchea;
-						if(patchea != BADADDR) {
-							if(!hint.empty())
-								hint.append('\n');
-							hint.cat_sprnt("patch addr %a ", patchea);
-							text_t disasm;
-							gen_disasm_text(disasm, patchea, get_item_end(patchea) + 64, false);
-							if(disasm.size()) {
-								for(size_t i = 0; i < disasm.size(); i++) {
-									hint.append('\n');
-									hint += disasm[i].line;
-								}
-								if(disasm.size() > 3)
-									*important_lines = 5;
-								else
-									*important_lines = (int)disasm.size() + 2;
-							} else {
-								hint += get_short_name(patchea);
-								*important_lines = 2;
-							}
-						} else {
-							*important_lines = 1;
+	if(!acv)
+		return 0;
+
+	switch(ncode) {
+	case ui_get_custom_viewer_hint:
+	{
+		qstring &hint = *va_arg(va, qstring *);
+		TWidget *viewer = va_arg(va, TWidget *);
+		place_t *place         = va_arg(va, place_t *);
+		int *important_lines   = va_arg(va, int *);
+		if(acv->cv == viewer) {
+			if(!place)
+				return 0;
+			simpleline_place_t *spl = (simpleline_place_t *)place;
+			if(spl->n < appcaller.calls.size()) {
+				hint = appcaller.calls[spl->n].callStr;
+				ea_t patchea = appcaller.calls[spl->n].patchea;
+				if(patchea != BADADDR) {
+					if(!hint.empty())
+						hint.append('\n');
+					hint.cat_sprnt("patch addr %a ", patchea);
+					text_t disasm;
+					gen_disasm_text(disasm, patchea, get_item_end(patchea) + 64, false);
+					if(disasm.size()) {
+						for(size_t i = 0; i < disasm.size(); i++) {
+							hint.append('\n');
+							hint += disasm[i].line;
 						}
+						if(disasm.size() > 3)
+							*important_lines = 5;
+						else
+							*important_lines = (int)disasm.size() + 2;
 					} else {
-						*important_lines = 0;
+						hint += get_short_name(patchea);
+						*important_lines = 2;
 					}
-          return 1;
-        }
-        break;
-      }
-    case ui_widget_invisible:
-      {
-			TWidget *f = va_arg(va, TWidget *);
-        if(f == si->cv) {
-          delete si;
-					acv = NULL;
-          unhook_from_notification_point(HT_UI, ui_callback);
-        }
-      }
-      break;
-    case ui_populating_widget_popup:
-      {
-				TWidget *f = va_arg(va, TWidget *);
-				if(f == si->cv && appcaller.calls.size()) {
-					for (size_t i = 0, n = qnumber(actions); i < n; ++i)
-						attach_action_to_popup(f, NULL, actions[i].name);
+				} else {
+					*important_lines = 1;
 				}
-      }
-      break;
-  }
-  return 0;
+			} else {
+				*important_lines = 0;
+			}
+			return 1;
+		}
+		break;
+	}
+	case ui_widget_invisible:
+	{
+		TWidget *f = va_arg(va, TWidget *);
+		if(f == acv->cv) {
+			delete acv;
+			acv = NULL;
+			UNHOOK_CB(HT_UI, appcall_ui_callback);
+		}
+		break;
+	}
+	case ui_populating_widget_popup:
+	{
+		TWidget *f = va_arg(va, TWidget *);
+		if(f == acv->cv && appcaller.calls.size()) {
+			for (size_t i = 0, n = qnumber(actions); i < n; ++i)
+				attach_action_to_popup(f, NULL, actions[i].name);
+		}
+		break;
+	}
+	}
+	return 0;
 }
 
 //-------------------------------------------------------------------------
@@ -355,7 +354,7 @@ static const custom_viewer_handlers_t handlers(
 ACT_DEF(show_appcall_view)
 {
 	if(appcaller.funcea == BADADDR) {
-		msg("[hrt] not yet appcall results\n");
+		Log(llNotice, "not yet appcall results\n");
 		return 0;
 	}
 
@@ -383,13 +382,9 @@ ACT_DEF(show_appcall_view)
   simpleline_place_t s1;
   simpleline_place_t s2((int)acv->sv.size() - 1);
 	acv->cv = create_custom_viewer(caption.c_str(), &s1, &s2, &s1, NULL, &acv->sv, &handlers, acv);
-  hook_to_notification_point(HT_UI, ui_callback, acv);
+  HOOK_CB(HT_UI, appcall_ui_callback);
 
-#if IDA_SDK_VERSION < 730
-	display_widget(acv->cv, WOPN_TAB);
-#else
 	display_widget(acv->cv, WOPN_DP_TAB, "IDA View-A");
-#endif //IDA_SDK_VERSION < 730
 	return 1;
 }
 

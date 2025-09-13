@@ -1,5 +1,5 @@
 /*
-    Copyright © 2017-2024 AO Kaspersky Lab
+    Copyright © 2017-2025 AO Kaspersky Lab
 
     This program is free software: you can redistribute it and/or modify
     it under the terms of the GNU General Public License as published by
@@ -18,7 +18,15 @@
 */
 
 #pragma once
-void msig_save();
-void msig_load();
-bool msig_add(mbl_array_t* mba);
+void msig_reg_act();
+void msig_unreg_act();
+void msig_auto_load();
+void msig_auto_save();
 const char* msig_match(mbl_array_t* mba);
+const char* msig_cached(ea_t ea);
+extern const char msigMessage[];
+bool isMsig(vdui_t *vu, qstring* name);
+
+// returns new name; empty string to refuse renaming
+typedef qstring msig_rename_cb_t(void* ctx, const char* name);
+uint32 msig_rename(msig_rename_cb_t* cb, void* ctx);

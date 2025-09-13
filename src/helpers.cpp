@@ -1,5 +1,5 @@
 /*
-    Copyright © 2017-2024 AO Kaspersky Lab
+    Copyright © 2017-2025 AO Kaspersky Lab
 
     This program is free software: you can redistribute it and/or modify
     it under the terms of the GNU General Public License as published by
@@ -28,6 +28,7 @@
 #include "warn_on.h"
 
 #include "helpers.h"
+#include "config.h"
 
 bool at_atoea(const char * str, ea_t * pea )
 {
@@ -74,7 +75,7 @@ size_t get_idx_of_lvar(vdui_t &vu, lvar_t *lvar)
 tinfo_t getType4Name(const char *name, bool funcType /*= false*/)
 {
 	qstring newName = name;
-	stripName(&newName);
+	stripName(&newName, funcType);
 	bool isPtr = false;
 	bool isDblPtr = false;
 
@@ -154,17 +155,18 @@ void create_type_from_size(tinfo_t* t, asize_t size)
 	}
 }
 
-void stripName(qstring* name)
+void stripName(qstring* name, bool funcSuffixToo /*= false*/)
 {
 	size_t len = name->length();
-	if (len > 6 && !strncmp(name->c_str(), "__imp_", 6)) {
-		name->remove(0, 6);
-		len -= 6;
-	}
-
-	while (len > 2 && !strncmp(name->c_str(), "j_", 2)) {
-		name->remove(0, 2);
-		len -= 2;
+	if(funcSuffixToo) {
+		if (len > 6 && !strncmp(name->c_str(), "__imp_", 6)) {
+			name->remove(0, 6);
+			len -= 6;
+		}
+		while (len > 2 && !strncmp(name->c_str(), "j_", 2)) {
+			name->remove(0, 2);
+			len -= 2;
+		}
 	}
 
 	if (len > 2) {
@@ -185,13 +187,13 @@ void stripNum(qstring* name)
 	size_t l = name->length();
 #if IDA_SDK_VERSION < 830
 	//strip "i64" suffix
-	if(l > 3 && !qstrcmp(name->c_str() + l - 3, "i64")) {
+	if(l > 3 && !qstrcmp(name->begin() + l - 3, "i64")) {
 		l -= 3;
 		name->remove_last(3);
 	}
 #else //IDA_SDK_VERSION >= 830
 	//strip "LL" suffix
-	if(l > 2 && !qstrcmp(name->c_str() + l - 2, "LL")) {
+	if(l > 2 && !qstrcmp(name->begin() + l - 2, "LL")) {
 		l -= 2;
 		name->remove_last(2);
 	}
@@ -233,17 +235,38 @@ qstring good_udm_name(const tinfo_t &struc, uint64 offInBits, const char *format
 		name.resize(MAX_NAME_LEN - 3);
 	validate_name(&name, VNT_UDTMEM);
 
-	udm_t m;
-	m.name = name;
-	int i = 1;
-	while(struc.find_udm(&m, STRMEM_NAME) >= 0 && i < 100) {
-		// the same name in the same position is ok for struct
-		if(m.offset == offInBits && struc.is_struct())
-			break;
-		m.name.sprnt("%s_%d", name.c_str(), i++);
-	}
-	return m.name;
+	return unique_name(name.c_str(), "_",
+										 [&struc, offInBits](const qstring &n)
+	{
+		udm_t m;
+		m.name = n;
+		return struc.find_udm(&m, STRMEM_NAME) < 0 || (m.offset == offInBits && struc.is_struct()); 		// the same name in the same position is ok for struct
+	});
 }
+
+#if IDA_SDK_VERSION < 850
+qstring good_smember_name(const struc_t* sptr, ea_t offset, const char *format, ...)
+{
+	qstring name;
+	va_list va;
+	va_start(va, format);
+	name.vsprnt(format, va);
+	va_end(va);
+
+	if(name.size() > MAX_NAME_LEN)
+		name.resize(MAX_NAME_LEN);
+	//validate_name(&name, VNT_UDTMEM);
+
+	return unique_name(name.c_str(), "_",
+										 [&sptr, offset](const qstring &n)
+	{
+
+		member_t *m = get_member_by_name(sptr, n.c_str());
+		return !m || (m->soff == offset && !sptr->is_union());
+	});
+}
+#endif //IDA_SDK_VERSION < 850
+
 
 void patch_str(ea_t ea, const char *str, sval_t len, bool bZeroTerm)
 {
@@ -321,7 +344,7 @@ bool appendComment(qstring &comments, qstring &newCmt, bool bDuplicable)
 	return false;
 }
 
-bool setComment4Exp(cfunc_t* func, user_cmts_t *cmts, cexpr_t *expr, const char* comment, bool bDisasmOnly, bool bSemicolonCmt, bool bOverride)
+bool setComment4Exp(cfunc_t* func, user_cmts_t *cmts, citem_t *expr, const char* comment, bool bDisasmOnly, bool bSemicolonCmt, bool bOverride)
 {
 	if (!expr || !qstrlen(comment))
 		return false;
@@ -358,13 +381,13 @@ bool setComment4Exp(cfunc_t* func, user_cmts_t *cmts, cexpr_t *expr, const char*
 		return true;
 	}
 	const char* existCmt = func->get_user_cmt(loc, RETRIEVE_ALWAYS);
-	if(qstrcmp(existCmt, comment)) {
+	if(!qstrstr(existCmt, comment)) {
 		qstring s;
 		s.sprnt("%s %s", existCmt, comment); // join old and new comment
 		func->set_user_cmt(loc, s.c_str());
 		return true;
 	}
-	msg("[hrt] %a not join comments '%s' and '%s'\n", expr->ea, existCmt, comment);
+	Log(llDebug, "%a not join comments '%s' and '%s'\n", expr->ea, existCmt, comment);
 	return false;
 }
 
@@ -411,7 +434,7 @@ void printExp2Msg(const cfunc_t *func, cexpr_t *expr, const char* mesg)
 	qstring SExp = printExp(func, expr);
 	qstring funcname;
 	get_short_name(&funcname, func->entry_ea);
-	msg("[hrt] %a %s: %s '%s'\n", expr->ea, funcname.c_str(), mesg, SExp.c_str());
+	Log(llInfo, "%a %s: %s '%s'\n", expr->ea, funcname.c_str(), mesg, SExp.c_str());
 }
 
 void replaceExp(const cfunc_t *func, cexpr_t *expr, cexpr_t *newExp, bool clean)
@@ -420,7 +443,7 @@ void replaceExp(const cfunc_t *func, cexpr_t *expr, cexpr_t *newExp, bool clean)
 	qstring SnewExp = printExp(func, newExp);;
 	qstring funcname;
 	get_short_name(&funcname, func->entry_ea);
-	msg("[hrt] %a %s: '%s' was replaced to '%s'\n", expr->ea, funcname.c_str(), SoldExp.c_str(), SnewExp.c_str());
+	Log(llInfo, "%a %s: '%s' was replaced to '%s'\n", expr->ea, funcname.c_str(), SoldExp.c_str(), SnewExp.c_str());
 
 	if (clean)
 		expr->cleanup();
@@ -454,4 +477,54 @@ bool jump_custom_viewer(TWidget* custom_viewer, int line, int x, int y)
 	simpleline_place_t* newplace = (simpleline_place_t*)place->clone();
 	newplace->n = line;
 	return jumpto(custom_viewer, newplace, x, y);
+}
+
+//------------------------------------------------
+
+void LogLevelNames(qstrvec_t *v)
+{
+	v->clear();
+	v->push_back("Error");
+	v->push_back("Warning");
+	v->push_back("Notice");
+	v->push_back("Info");
+	v->push_back("Debug");
+	v->push_back("Flood");
+}
+
+static char LogLevelName(LogLevel level)
+{
+	switch(level) {
+	case llError: return 'e';
+	case llWarning: return 'w';
+	case llNotice: return 'n';
+	case llInfo: return 'i';
+	case llDebug: return 'd';
+	case llFlood: return 'f';
+	default: return 'u';
+	}
+}
+
+int Log(LogLevel level, const char *fmt, ...)
+{
+	if(level > cfg.logLevel)
+		return 0;
+	qstring s;
+	s.sprnt("[hrt %c] ", LogLevelName(level));
+	va_list va;
+  va_start(va, fmt);
+	s.cat_vsprnt(fmt, va);
+	va_end(va);
+  return msg(s.c_str());
+}
+
+int LogTail(LogLevel level, const char *fmt, ...)
+{
+	if(level > cfg.logLevel)
+		return 0;
+	va_list va;
+  va_start(va, fmt);
+	int res = vmsg(fmt, va);
+	va_end(va);
+  return res;
 }

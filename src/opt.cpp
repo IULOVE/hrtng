@@ -335,7 +335,7 @@ bool FindInsWithTheOp(mblock_t* blk, mop_t* op, minsn_t* start, minsn_t*& ins, m
 				qstring qs;
 				mDef->print(&qs);
 				tag_remove(&qs);
-				msg("[E] %a: FindInsWithTheOp found '%s'\n", mDef->ea, qs.c_str());
+				MSG_DO(("[E] %a: FindInsWithTheOp found '%s'\n", mDef->ea, qs.c_str()));
 #endif
 				return false;
 			}
@@ -590,7 +590,7 @@ bool TraceAndExtractOpsMovAndSubBy1(mblock_t* blk, mop_t*& opMov, mop_t*& opSub,
 			if (blk == NULL)
 				return 0;
 			// data flow tracking #2: both of the operands are not extracted due to lack of nested sub instruction
-			//msg("pat_MulSub2: tracking #2 OR ins %#a at %#a\n", orIns->ea, blk->mba->entry_ea);
+			MSG_DO(("[I] pat_MulSub2: tracking #2 OR ins %#a at %#a\n", orIns->ea, blk->mba->entry_ea));
 			if (!TraceAndExtractOpsMovAndSubBy1(blk, opMulNonSub, subNonNum, insMul))
 				return 0;
 		}
@@ -601,7 +601,7 @@ bool TraceAndExtractOpsMovAndSubBy1(mblock_t* blk, mop_t*& opMov, mop_t*& opSub,
 			if (blk == NULL)
 				return 0;
 			// data flow tracking #3: both of the operands are extracted but different due to assignment to registers
-			//msg("pat_MulSub2: tracking #3 OR ins %#a at %#a\n", orIns->ea, blk->mba->entry_ea);
+			MSG_DO(("[I] pat_MulSub2: tracking #3 OR ins %#a at %#a\n", orIns->ea, blk->mba->entry_ea));
 			minsn_t* insMov;
 			if (opMulNonSub->t != mop_v && FindInsWithTheOp(blk, opMulNonSub, insMul, insMov, m_mov))
 				opMulNonSub = &insMov->l;
@@ -652,8 +652,7 @@ bool TraceAndExtractOpsMovAndSubBy1(mblock_t* blk, mop_t*& opMov, mop_t*& opSub,
 				return 0;
 			if (!IsReadOnlyInitedVar(&insOut->l))
 				return 0;
-			//else
-				//msg("pat_InitedVarCondImm: tracked ins %a at %a\n", ins->ea, blk->mba->entry_ea);
+			//else { MSG_DO(("[I] pat_InitedVarCondImm: tracked ins %a at %a\n", ins->ea, blk->mba->entry_ea));}
 		}
 
 		// Replace the global variable with 0
@@ -917,7 +916,7 @@ bool TraceAndExtractOpsMovAndSubBy1(mblock_t* blk, mop_t*& opMov, mop_t*& opSub,
 			return 0;
 
 		qstring funcname = get_name(call->l.g);
-		stripName(&funcname);
+		stripName(&funcname, true);
 		if(funcname.length() > 3)
 			return 0; //optimize away funcs with longer names
 
@@ -936,7 +935,7 @@ bool TraceAndExtractOpsMovAndSubBy1(mblock_t* blk, mop_t*& opMov, mop_t*& opSub,
 			return 0;
 		}
 		MSG_DO(("[I] call_ARITH_2const: '%s'", call->dstr()));
-		op->make_number(res, (int)fi->return_type.get_size());
+		op->make_number(res, (int)fi->return_type.get_size(), call->ea);
 		return 1;
 	}
 
@@ -954,7 +953,7 @@ bool TraceAndExtractOpsMovAndSubBy1(mblock_t* blk, mop_t*& opMov, mop_t*& opSub,
 		//FIXME: what about spoiled registers and stack balance in case of __stdcall
 
 		qstring funcname = get_name(ins->l.g);
-		stripName(&funcname);
+		stripName(&funcname, true);
 		if(funcname.length() <= 6 || strncmp(funcname.c_str() + 3, "_0x", 3))
 			return 0;
 
@@ -986,7 +985,7 @@ bool TraceAndExtractOpsMovAndSubBy1(mblock_t* blk, mop_t*& opMov, mop_t*& opSub,
 		if(opcode == m_ret) {
 			if(!op)
 				return 0;
-			op->make_number(n, (int)fi->return_type.get_size());
+			op->make_number(n, (int)fi->return_type.get_size(), ins->ea);
 		} else {
 			if(fi->args.size() < 1)
 				return 0;
@@ -994,14 +993,14 @@ bool TraceAndExtractOpsMovAndSubBy1(mblock_t* blk, mop_t*& opMov, mop_t*& opSub,
 				minsn_t* add = new minsn_t(ins->ea);
 				add->opcode = m_add;
 				add->l = fi->args.front();
-				add->r.make_number(n, add->l.size);
+				add->r.make_number(n, add->l.size, ins->ea);
 				add->d.size = ea_size;
 				ins->r.make_insn(add);
 				ins->r.size = ea_size;
 				ins->l.make_reg(reg2mreg(R_ds), 2); //FIXME: x86 specific!
 			} else {
 				ins->l = fi->args.front();
-				ins->r.make_number(n, (int)fi->return_type.get_size());
+				ins->r.make_number(n, (int)fi->return_type.get_size(), ins->ea);
 			}
 			ins->opcode = opcode;
 		}
@@ -1012,7 +1011,7 @@ bool TraceAndExtractOpsMovAndSubBy1(mblock_t* blk, mop_t*& opMov, mop_t*& opSub,
 	// to:     x == c ^ d
 	int pat_XorCondImm(minsn_t* cjmp, mblock_t* blk)
 	{
-		if(!is_mcode_convertible_to_set(cjmp->opcode))
+		if(!is_mcode_convertible_to_set(cjmp->opcode) && !is_mcode_convertible_to_jmp(cjmp->opcode))
 			return 0;
 
 		if(!cjmp->l.is_insn(m_xor))
@@ -1119,7 +1118,7 @@ struct ida_local InstOptimizer : public optinsn_t
 			if (blk) {
 				blk->optimize_insn(ins);
 				blk->mark_lists_dirty();
-				//blk->mba->verify(true);
+				blk->mba->verify(false);
 			} else {
 				ins->optimize_solo();
 			}

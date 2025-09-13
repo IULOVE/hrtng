@@ -2,7 +2,7 @@ CMAKE_MINIMUM_REQUIRED(VERSION 3.10)
 project(hrtng)
 
 #run ccmake to change IDASDK_VER
-SET(IDASDK_VER "91" CACHE STRING "91" )
+SET(IDASDK_VER "92" CACHE STRING "92" )
 SET(IDASDK_DIR ${CMAKE_SOURCE_DIR}/../../idasdk${IDASDK_VER})
 MESSAGE("${PROJECT_NAME}")
 MESSAGE("Using IDA SDK dir: ${IDASDK_DIR}")
@@ -27,12 +27,18 @@ ADD_IDA_PLUGIN(hrtng
   appcall.cpp
   appcall_view.cpp
   cast.cpp
+  callrefs.cpp
   comhelper.cpp
+  config.cpp
   crpp.cpp
+  ctreeg.cpp
   decr.cpp
   deinline.cpp
   deob.cpp
+  regrefs.cpp
   helpers.cpp
+  invert_if.cpp
+  idb2pat.cpp
   lit.cpp
   MicrocodeExplorer.cpp
   microavx.cpp
@@ -42,8 +48,10 @@ ADD_IDA_PLUGIN(hrtng
   new_struc_view.cpp
   new_struct.cpp
   structures.cpp
+  refactoring.cpp
   rename.cpp
   unflat.cpp
+  varval.cpp
   )
 
 if(NOT MSVC)

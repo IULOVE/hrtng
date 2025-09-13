@@ -1,5 +1,5 @@
 /*
-    Copyright © 2017-2024 AO Kaspersky Lab
+    Copyright © 2017-2025 AO Kaspersky Lab
 
     This program is free software: you can redistribute it and/or modify
     it under the terms of the GNU General Public License as published by
@@ -114,7 +114,7 @@ static bool is_reincastable(cexpr_t *e)
 			return false;
 		break;
 	case cot_memptr:
-		if (e->x->type.is_union())
+		if (remove_pointer(e->x->type).is_union())
 			return false;
 		break;
 	default:
@@ -177,7 +177,7 @@ void convert_offsetof_n_reincasts(cfunc_t *cfunc)
 			tid_t last_member = BADNODE;
 			asize_t remainder = struct_get_member(strucId, (asize_t)n, &last_member, &trace);
 			if (last_member == BADNODE) {
-				//msg("[hrt] reincast convert: no member at %d\n", n);
+				Log(llDebug, "reincast convert: no member at %d\n", n);
 				return NULL;
 			}
 
@@ -204,7 +204,7 @@ void convert_offsetof_n_reincasts(cfunc_t *cfunc)
 			if (trace.size() <= 1) {
 				res->type = cast->type;//make_pointer(create_typedef(num->nf.type_name.c_str()));
 				res->m = (uint32_t)n;
-				//res->ptrsize = 8; //is it need?
+				res->ptrsize = static_cast<decltype(res->ptrsize)>(res->type.get_size()); //is it need?
 			} else {
 				for (size_t i = 0; i < trace.size(); i++) {
 #if IDA_SDK_VERSION < 850
@@ -315,7 +315,7 @@ void convert_offsetof_n_reincasts(cfunc_t *cfunc)
 				break;
 			case cot_memptr:
 				x = exp->x;
-				if (x->type.is_union())
+				if (remove_pointer(x->type).is_union())
 					return false;
 				n = exp->m;
 				ptr = true;
@@ -333,8 +333,8 @@ void convert_offsetof_n_reincasts(cfunc_t *cfunc)
 				return false;
 			if (ptr) {
 				res = new cexpr_t(cot_ptr, res);
-				res->ptrsize = exp->ptrsize;
 				res->type = exp->type;
+				res->ptrsize = static_cast<decltype(res->ptrsize)>(res->type.get_size());
 			}
 			replaceExp(func, exp, res);
 			return true;
@@ -344,7 +344,7 @@ void convert_offsetof_n_reincasts(cfunc_t *cfunc)
 		int idaapi leave_expr(cexpr_t *e)
 		{
 			if ((offsetof_test(e) || reincast(e)) && recalc_parent_types()) {
-				//msg("[hrt] restart reincast\n");
+				Log(llDebug, "restart reincast\n");
 				bDoRestart = true;
 				return 1;
 			}
@@ -392,7 +392,7 @@ ACT_DEF(insert_reinterpret_cast)
 #endif //IDA_SDK_VERSION < 850
 
 	add_cached_reincast(anchor->ea, tid);
-	//msg("[hrt] add_cached_reincast at %a\n", anchor->ea);
+	Log(llDebug, "add_cached_reincast at %a\n", anchor->ea);
 	vu.refresh_view(false);
 	return 0;
 }
@@ -581,7 +581,7 @@ void convert_negative_offset_casts(cfunc_t *cfunc)
 #if DEBUG_NEG_CAST
 								qstring expStr;
 								asg->print1(&expStr, func); tag_remove(&expStr);
-								msg("[hrt] %a: cache assign %s (type '%s', off %x)\n", asg->ea, expStr.c_str(), sname.c_str(), (uint32)membOff);
+								Log(llDebug, "%a: cache assign %s (type '%s', off %x)\n", asg->ea, expStr.c_str(), sname.c_str(), (uint32)membOff);
 #endif
 //							}
 						}
@@ -605,7 +605,7 @@ void convert_negative_offset_casts(cfunc_t *cfunc)
 #if DEBUG_NEG_CAST
 				qstring expStr;
 				e->print1(&expStr, func); tag_remove(&expStr);
-				msg("[hrt] insideHelper (%a '%s')\n", insideHelper, expStr.c_str());
+				Log(llFlood, "insideHelper (%a '%s')\n", insideHelper, expStr.c_str());
 #endif
 				return false;
 			}
@@ -622,7 +622,7 @@ void convert_negative_offset_casts(cfunc_t *cfunc)
 #if DEBUG_NEG_CAST
 					qstring expStr;
 					e->print1(&expStr, func); tag_remove(&expStr);
-					msg("[hrt] disabled (%a '%s')\n", num->ea, expStr.c_str());
+					Log(llFlood, "disabled (%a '%s')\n", num->ea, expStr.c_str());
 #endif
 					return false;
 				}
@@ -635,7 +635,7 @@ void convert_negative_offset_casts(cfunc_t *cfunc)
 					return false;
 				from_off = it->second.memb_off;
 				if(diff < 0 && (int32)from_off < -diff) {
-					msg("[hrt] CONTAINER_OF casts substruct, pls select right type\n");
+					Log(llWarning, "CONTAINER_OF casts substruct, pls select right type\n");
 					return false;
 				}
 				cast_to = it->second.strucId;
@@ -648,7 +648,7 @@ void convert_negative_offset_casts(cfunc_t *cfunc)
 			if (!ti_cast_to.is_correct()) {
 				qstring tstr;
 				ti_cast_to.print(&tstr);
-				msg("[hrt] incorrect type for CONTAINER_OF (%s)\n", tstr.c_str());
+				Log(llDebug, "incorrect type for CONTAINER_OF (%s)\n", tstr.c_str());
 				return false;
 			}
 #endif
@@ -697,7 +697,7 @@ void convert_negative_offset_casts(cfunc_t *cfunc)
 			else if (e->op == cot_sub || e->op == cot_add /*|| e->op == cot_idx*/) {
 				if (convert_test(e) && recalc_parent_types()) {
 #if DEBUG_NEG_CAST
-					msg("[hrt] restart nc_converter\n");
+					Log(llDebug, "restart nc_converter\n");
 #endif
 					bDoRestart = true;
 					return 1;
@@ -838,31 +838,31 @@ ACT_DEF(use_CONTAINER_OF_callback)
 			qstring strname = definition.substr(0, plus).trim2();
 			tid_t tid = get_struc_id(strname.c_str());
 			if (tid == BADNODE) {
-				msg("[hrt] no such struct: '%s'\n", strname.c_str());
+				Log(llDebug, "no such struct: '%s'\n", strname.c_str());
 				continue;
 			}
 			qstring stroff = definition.substr(plus + 1);
 			ea_t convea;
 			if (!atoea(&convea, stroff.c_str())) {
-				msg("[hrt] bad offset: '%s'\n", stroff.c_str());
+				Log(llDebug, "bad offset: '%s'\n", stroff.c_str());
 				continue;
 			}
 			memboff = (asize_t)convea;
 			struc = get_struc(tid);
 
 		} else if(!get_member_offset_by_fullname(&struc, &memboff, definition.c_str())) {
-			msg("[hrt] no such struct member: '%s'\n", definition.c_str());
+			Log(llDebug, "no such struct member: '%s'\n", definition.c_str());
 			continue;
 		} 
 
 		if (offset > 0 || -offset <= (int32)memboff)
 			break;
 
-		msg("[hrt] struct member's '%s' offset 0x%x is less then subtract 0x%x", definition.c_str(), (uint32)memboff, -offset);
+		Log(llDebug, "struct member's '%s' offset 0x%x is less then subtract 0x%x", definition.c_str(), (uint32)memboff, -offset);
 		if(e->op == cot_idx)
-			msg(", try to 'reset pointer type' for base variable\n");
+			LogTail(llDebug, ", try to 'reset pointer type' for base variable\n");
 		else 
-			msg("\n");
+			LogTail(llDebug, "\n");
 	} while(1);
 
 	add_cached_cast(ea, struc->id, (uint32)memboff, offset);

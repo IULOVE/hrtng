@@ -1,5 +1,5 @@
 /*
-    Copyright © 2017-2024 AO Kaspersky Lab
+    Copyright © 2017-2025 AO Kaspersky Lab
 
     This program is free software: you can redistribute it and/or modify
     it under the terms of the GNU General Public License as published by
@@ -332,7 +332,7 @@ void deob_preprocess(mbl_array_t *mba)
 		return;
 
 	if (!isX86()) {
-		msg("[hrt] FIXME: deob_preprocess is x86 specific\n");
+		Log(llWarning, "FIXME: deob_preprocess is x86 specific\n");
 		return ;
 	}
 
@@ -385,7 +385,7 @@ void deob_preprocess(mbl_array_t *mba)
 			for (mreg_t i = 0; i < 0x100; i += 4) {
 				mop_t op;
 				op._make_reg(i);
-				//msg("[hrt] reg_%x  %s\n", i, op.dstr());
+				Log(llFlood, "reg_%x  %s\n", i, op.dstr());
 				if (!qstrcmp("eip", op.dstr())) {
 					eip = i;
 #if 1
@@ -432,7 +432,7 @@ void deob_preprocess(mbl_array_t *mba)
 static bool patch_jmp(ea_t from, ea_t to, asize_t maxLen)
 {
 	if (!isX86()) {
-		msg("[hrt] FIXME: patch_jmp is x86 specific\n");
+		Log(llWarning, "FIXME: patch_jmp is x86 specific\n");
 		return false;
 	}
 	qstring cmt(";patched: ");//';' in first position prevents comment be copyed to pseudocode
@@ -449,7 +449,7 @@ static bool patch_jmp(ea_t from, ea_t to, asize_t maxLen)
 	adiff_t dist = to - from - 2;
 	if (dist >= -128 && dist <= 127) {
 		if (maxLen < 2) {
-			msg("[hrt] %a: no space for patch\n", from);
+			Log(llWarning, "%a: no space for patch\n", from);
 			return false;
 		}
 		patch_byte(from, 0xeb);
@@ -457,7 +457,7 @@ static bool patch_jmp(ea_t from, ea_t to, asize_t maxLen)
 		patch_byte(from + 1, uint64(dist));
 	} else {
 		if (maxLen < 6) {
-			msg("[hrt] %a: no space for patch\n", from);
+			Log(llWarning, "%a: no space for patch\n", from);
 			return false;
 		}
 		patch_word(from, 0xe990); //prepend with 'nop' to be same size as 'jc'
@@ -465,7 +465,7 @@ static bool patch_jmp(ea_t from, ea_t to, asize_t maxLen)
 	}
 	create_insn(from);
 	set_cmt(from, cmt.c_str(), false);//FIXME: doesnt work, why????
-	msg("[hrt] %a: %s\n", from, cmt.c_str());
+	Log(llInfo, "%a: %s\n", from, cmt.c_str());
 	return true;
 }
 
@@ -592,7 +592,7 @@ struct ida_local frac_visitor_t : minsn_visitor_t
 					if (ret_dests->add_unique(ret_dest)) {
 						MSG_DO(("[hrt] new ret_addr %a\n", ret_dest));
 						//if(!has_xref(get_flags(ret_dest))) //FIXME: check xref 'from'
-						add_cref(curins->ea, ret_dest, fl_JN);
+						add_cref(curins->ea, ret_dest, (cref_t)(fl_JN | XREF_USER));
 					}
 				}
 			}
@@ -639,6 +639,15 @@ static bool ensure_code(ea_t ea)
 }
 #endif
 
+static void fill_nops(ea_t ea, uval_t len) {
+	add_extra_cmt(ea, true, "; patched %d bytes", len);
+	for (uval_t i = 0; i < len; i++) {
+		del_items(ea);
+		patch_byte(ea, 0x90);
+		create_insn(ea++);
+	}
+}
+
 bool disasm_dbl_jc(ea_t ea)
 {
 	if (!isX86())
@@ -647,8 +656,43 @@ bool disasm_dbl_jc(ea_t ea)
 	insn_t insn2;
 	if (decode_insn(&insn1, ea) <= 0)
 		return false;
+
+#if 1 //example1 of dirty hack is used to breakthrough some custom obfuscation
+	// patch jump into middle of self instr
+	// 0401249        loc_401249:
+	// 0401249 EB FF  jmp     short near ptr loc_401249+1
+	if((dflags & DF_PATCH) != 0 && insn1.itype == NN_jmp && insn1.ops[0].type == o_near && insn1.ops[0].addr == ea + 1) {
+		fill_nops(ea, 1);
+		return true;
+	}
+#endif //example1
+
 	if (decode_insn(&insn2, ea + insn1.size) <= 0)
 		return false;
+
+#if 1 //example2 of dirty hack is used to breakthrough some custom obfuscation
+	// patch xor & jz into middle of prev instr
+	// 0401357                 loc_401357:
+	// 0401357 66 41 BF EB 05  mov     r15w, 5EBh
+	// 040135C 31 C0           xor     eax, eax
+	// 040135E 74 FA           jz      short near ptr loc_401357+3
+	if((dflags & DF_PATCH) != 0
+		 && insn1.itype == NN_xor && insn1.ops[0].type == o_reg && insn1.ops[1].type == o_reg && insn1.ops[0].reg == insn1.ops[1].reg    // insn1 is: xor same reg
+		 && insn2.itype == NN_jz && insn2.ops[0].type == o_near && insn2.ops[0].addr == ea - 2 && is_tail(get_flags(insn2.ops[0].addr))) // insn2 is: jz to middle of prev instr
+	{
+		insn_t insn3;                                                                                                                    // insn3 is: short jmp is hidden inside "mov r15w, 5EBh"
+		if(decode_insn(&insn3, insn2.ops[0].addr) > 0 && insn3.itype == NN_jmp && insn3.ops[0].type == o_near && insn3.ops[0].addr == ea + insn1.size + insn2.size + 1)
+		{
+			//find beginning of prev instr
+			ea_t prev = insn2.ops[0].addr;
+			while (is_tail(get_flags(--prev))) ;
+
+			fill_nops(prev, insn3.ops[0].addr - prev);
+			return true;
+		}
+	}
+#endif //example2
+
 	bool isPair = false;
 	switch (insn1.itype)
 	{
@@ -730,7 +774,7 @@ void remove_funcs_tails(ea_t ea)
 		MSG_DO(("[hrt] func tail at %a deleted\n", ea));
 	} while (++i > 100);
 
-	if (i > 100 ) msg("[hrt] %a FIXME: remove_funcs_tails loops\n", ea);
+	if (i > 100 ) Log(llWarning, "%a FIXME: remove_funcs_tails loops\n", ea);
 }
 
 enum Add_BB_Stop_Reason {
@@ -827,7 +871,7 @@ static bool add_bb(ea_t eaBgn, rangeset_t &ranges)
 	default:
 		m = "none";
 	}
-	msg("[hrt] add_bb fail at %a with %s\n", ea, m);
+	Log(llDebug, "add_bb fail at %a with %s\n", ea, m);
 #endif
 	return false;
 }
@@ -839,7 +883,7 @@ static ea_t get_nullsub_1()
 		return ea;
 
 	if (!isX86()) {
-		msg("[hrt] FIXME: get_nullsub_1 is x86 specific\n");
+		Log(llWarning, "FIXME: get_nullsub_1 is x86 specific\n");
 		return BADADDR;
 	}
 
@@ -1005,7 +1049,7 @@ int decompile_obfuscated(ea_t eaBgn)
 		if (!mba || hf.code != MERR_OK) {
 			hide_wait_box();
 			deob_done();
-			msg("[hrt] %a: gen_microcode err %d (%s)\n", hf.errea, hf.code, hf.desc().c_str());
+			Log(llError, "%a: gen_microcode err %d (%s)\n", hf.errea, hf.code, hf.desc().c_str());
 			return 0;
 		}
 		
@@ -1061,7 +1105,7 @@ int decompile_obfuscated(ea_t eaBgn)
 		cfuncptr_t cf = decompile_snippet(ranges.as_rangevec(), &hf, DECOMP_NO_CACHE | DECOMP_NO_FRAME | DECOMP_WARNINGS | DECOMP_ALL_BLKS);
 		deob_done();
 		if (hf.code != MERR_OK) {
-			msg("[hrt] decompile_snippet error %d: %s\n", hf.code, hf.desc().c_str());
+			Log(llError, "decompile_snippet error %d: %s\n", hf.code, hf.desc().c_str());
 			return 0;
 		}
 		cf->mba->dump();
@@ -1074,7 +1118,7 @@ int decompile_obfuscated(ea_t eaBgn)
 	}
 
 	if (stuck_ea != BADADDR) {
-		msg("[hrt] stuck at %a\n", stuck_ea);
+		Log(llWarning, "stuck at %a\n", stuck_ea);
 		no_code_warning(stuck_ea);
 	}
 	return 1;

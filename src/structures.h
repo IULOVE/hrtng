@@ -1,17 +1,19 @@
 //Evolution of structures.h from https://github.com/nihilus/hexrays_tools
 #pragma once
 
-tid_t create_VT_struc(ea_t VT_ea, const char* basename, uval_t idx = BADADDR, unsigned int* vt_len = NULL);
-int create_VT(tid_t parent, ea_t VT_ea);
+tid_t create_VT_struc(ea_t VT_ea, const char* basename, uval_t idx = BADADDR, unsigned int* vt_len = NULL, bool autoScan = false);
+int create_VT(tid_t parent, ea_t VT_ea, bool autoScan = false);
+void auto_create_vtbls(cfunc_t *cfunc);
 
 typedef qvector<tid_t> tidvec_t;
 asize_t struct_get_member(tid_t strId, asize_t offset, tid_t* last_member, tidvec_t* trace = NULL, asize_t adjust = 0);
 
-bool confirm_create_struct(tinfo_t &out_type, tinfo_t &in_type, const char* sprefix);
+bool confirm_create_struct(tinfo_t &out_type, qstring& out_type_name, tinfo_t &in_type, const char* sprefix);
 
 bool struct_has_member(tid_t strId, asize_t offset);
 bool print_struct_member_name(tid_t strcId, asize_t offset, qstring* name, bool InRecur = false);
 bool print_struct_member_type(tid_t membId, qstring *tname);
+tinfo_t type_by_tid(tid_t tid);
 
 struct ida_local matched_structs_t : public chooser_t
 {

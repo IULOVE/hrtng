@@ -12,6 +12,7 @@
 #include "helpers.h"
 #include "MicrocodeExplorer.h"
 
+#if IDA_SDK_VERSION < 920
 //typedef qrefcnt_t<mbl_array_t*> shared_mbl_array_t;
 typedef std::shared_ptr<mbl_array_t *> shared_mbl_array_t;
 
@@ -605,11 +606,7 @@ void showMicrocodeExplorer(mbl_array_t* mba, bool keepMba, const char* name)
 		NULL); // parent
 
 	hook_to_notification_point(HT_UI, ui_callback, si);
-#if IDA_SDK_VERSION < 730
-	display_widget(si->cv, WOPN_TAB | WOPN_NOT_CLOSED_BY_ESC);
-#else
 	display_widget(si->cv, WOPN_DP_TAB | WOPN_NOT_CLOSED_BY_ESC, "IDA View-A");
-#endif //IDA_SDK_VERSION < 730
 }
 
 void ShowMicrocodeExplorer(mbl_array_t* mba, const char* name)
@@ -651,7 +648,6 @@ mba_maturity_t AskDesiredMaturity()
 
 
 //-------------------------------------------------------------------------
-#define AST_ENABLE_ALW return AST_ENABLE_ALWAYS
 ACT_DECL(show_microcode_explorer, AST_ENABLE_ALW)
 
 void registerMicrocodeExplorer()
@@ -687,3 +683,4 @@ ACT_DEF(show_microcode_explorer)
 	showMicrocodeExplorer(mba, true, MicroMaturityToString(mmat));
 	return 1;
 }
+#endif //IDA_SDK_VERSION < 920
