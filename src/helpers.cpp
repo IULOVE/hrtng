@@ -32,7 +32,7 @@
 
 bool at_atoea(const char * str, ea_t * pea )
 {
-	while(*str && isspace(*str))
+	while(*str && qisspace(*str))
 		str++;
 	if(str[0] == '@' && str[1] == '0' && str[2] == 'x')
 		return atoea(pea, str + 1);
@@ -109,6 +109,19 @@ tinfo_t getType4Name(const char *name, bool funcType /*= false*/)
 	return t;
 }
 
+bool isNamedTypeExists(const char *name)
+{
+#if 0
+	// usually it ok to check dummy name conflict only in local TIL
+	if(get_named_type_tid(name) != BADADDR)
+		return true;
+#else
+	// but once you may import TIL with such names
+	if(get_named_type(nullptr, name, NTF_TYPE))
+		return true;
+#endif
+	return false;;
+}
 
 bool is_ea(flags64_t flg)
 {
