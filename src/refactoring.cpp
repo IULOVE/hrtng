@@ -1,5 +1,5 @@
 /*
-    Copyright © 2017-2025 AO Kaspersky Lab
+    Copyright © 2017-2026 AO Kaspersky Lab
 
     This program is free software: you can redistribute it and/or modify
     it under the terms of the GNU General Public License as published by
@@ -313,7 +313,7 @@ struct ida_local refac_t {
 				}
 			}
 
-#ifndef _DEBUG // restore_user_lvar_settings may cause crash somewhere deep inside decompiler on access nullptr exception on Windows in Debug mode (prbbl because of std::map)
+#if IDA_SDK_VERSION >= 930 || !defined(_DEBUG) // restore_user_lvar_settings may cause crash on early IDA versions somewhere deep inside decompiler on access nullptr exception on Windows in Debug mode (prbbl because of std::map)
 			//match func local vars
 			lvar_uservec_t lvinf;
 			if(restore_user_lvar_settings(&lvinf, ea)) {
@@ -331,7 +331,7 @@ struct ida_local refac_t {
 					add(nn.c_str(), eRF_loclVar, ea);
 				}
 			}
-#endif
+#endif //IDA_SDK_VERSION >= 930 || !defined(_DEBUG)
 
 			//match func local comments
 			user_cmts_t *cmts = restore_user_cmts(ea);
@@ -460,7 +460,7 @@ struct ida_local refac_t {
 			}
 			for(size_t i = 0; i < lines.size(); i++) {
 				if(match(lines[i]))
-					add(lines[i].c_str(), eRF_notepad, i);
+					add(lines[i].c_str(), eRF_notepad, (ea_t)i);
 			}
 		}
 		return true;
@@ -554,7 +554,7 @@ struct ida_local refac_t {
 			}
 			case eRF_loclVar:
 			{
-#ifndef _DEBUG   // restore_user_lvar_settings may cause crash somewhere deep inside decompiler on access nullptr exception on Windows in Debug mode
+#if IDA_SDK_VERSION >= 930 || !defined(_DEBUG) // restore_user_lvar_settings may cause crash on early IDA versions somewhere deep inside decompiler on access nullptr exception on Windows in Debug mode
 			  // save_user_lvar_settings cause internal error 1099 on the same sample
 				lvar_uservec_t lvinf;
 				if(is_func(get_flags(m.ea)) && restore_user_lvar_settings(&lvinf, m.ea)) {
@@ -588,7 +588,7 @@ struct ida_local refac_t {
 				}
 				++failc;
 				Log(llWarning, "Refactoring %a: fail local vars renaming '%s'\n", m.ea, m.name.c_str());
-#endif
+#endif // IDA_SDK_VERSION >= 930 || !defined(_DEBUG)
 				break;
 			}
 			case eRF_usrCmts:
@@ -792,11 +792,23 @@ qstring msig_replace(void* ctx, const char* name)
 }
 
 //--------------------------------------------------------------------------
-static const int rcwidths[] = { 45 | CHCOL_PLAIN | CHCOL_INODENAME, 45  | CHCOL_PLAIN, 16 | CHCOL_EA | CHCOL_DEFHIDDEN, 4 | CHCOL_PLAIN
+static const int rcwidths[] =
+{
+	// "Found" column
+	45 | CHCOL_PLAIN | CHCOL_INODENAME,
+
+	// "Replace to" column
+	45 | CHCOL_PLAIN,
+
+	// "Address/TypeID" column
+	16 | CHCOL_EA | CHCOL_DEFHIDDEN,
+
+	// "Kind" column
+	4 | CHCOL_PLAIN
 #if IDA_SDK_VERSION >= 770
-																| CHCOL_DEFHIDDEN
+	| CHCOL_DEFHIDDEN
 #endif //IDA_SDK_VERSION >= 770
-															};
+};
 static const char *const rcheader[] = { "Found", "#The real result may vary#Replace to (*)", "Address/TypeID", "Kind"};
 
 struct ida_local rf_chooser_t : public chooser_t
@@ -1036,7 +1048,7 @@ int do_refactoring(action_activation_ctx_t *ctx)
 	rf_chooser_t* rfch = new rf_chooser_t(refac);
   sizevec_t selected;
   selected.push_back(0);  // first item by default
-	
+
 	static const char form[] =
 //		"STARTITEM 2\n" // to put the cursor on replaceWith field
 		"BUTTON YES* ~R~eplace\n"

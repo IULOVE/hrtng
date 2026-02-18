@@ -1,6 +1,8 @@
 ## Microcode optimizers
 
-### "Magic" call replacement. 
+### "Magic" call replacement.
+> ⚠️ Consider using [outlined function](https://hex-rays.com/blog/igors-tip-of-the-week-106-outlined-functions) is appeared in IDA 8.0.
+
 C++ optimizing compiler may reuse code of simple class methods like `member_t* CMyClass::GetMember() { return &member;}` for different classes.
 So in a usual way the reverser should create union for the classes were used to call this method and apply it to the `this` argument of the call and one more union for all possible returning types.  
 However the such a simply call might be replaced to micro-code that directly access class member, so type casting of argument and return value will be automatically resolved by the decompiler.  
@@ -18,14 +20,14 @@ For the following calls where `NN` is a number in hex and `x` is an any expressi
  * `XOR_0xNN(x)` ==> `x ^ NN`
 
 One more optimizer watches calls that do simple arithmetic operation and inlines the call as arithmetic operation with call's arguments.
-Size of resulting number is set equal to the returning type size of original call.
+Size of resulting expression is equal to the returning type size of original call.
  * `ADD(a1, a2)` ==> `a1 + a2` 
  * `SUB(a1, a2)` ==> `a1 - a2` 
  * `AND(a1, a2)` ==> `a1 & a2` 
  * `OR_(a1, a2)` ==> `a1 | a2` 
  * `XOR(a1, a2)` ==> `a1 ^ a2` 
 
->⚠️ **Warning:** arguments and returning type of arithmetic functions declaration listed above (`ADD`, `ADD_0xNN`, etc) must be the same, otherwise you will got INTERR 50830 or 50831 
+>⚠️ **Warning:** arguments and returning type of arithmetic functions listed above (`ADD`, `ADD_0xNN`, etc) must be the same, otherwise you will got INTERR 50830 or 50831 
 
 ### Opaque Predicates removers mostly derived from HexRaysDeob plugin by Rolf Rolles and Takahiro Haruyama
 

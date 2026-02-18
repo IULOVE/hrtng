@@ -1,5 +1,5 @@
 /*
-    Copyright © 2017-2025 AO Kaspersky Lab
+    Copyright © 2017-2026 AO Kaspersky Lab
 
     This program is free software: you can redistribute it and/or modify
     it under the terms of the GNU General Public License as published by
@@ -45,6 +45,14 @@
 	};\
 	static name ## _t name;
 
+#if IDA_SDK_VERSION < 930
+  #define BWN_TITREE BWN_TICSR
+#else
+  #define CHCOL_INODENAME OBSOLETE_CHCOL_INODENAME
+  #define CH_HAS_DIRTREE OBSOLETE_CH_HAS_DIRTREE
+  #define CH_TM_FULL_TREE OBSOLETE_CH_TM_FULL_TREE
+  #define CH_NON_PERSISTED_TREE OBSOLETE_CH_NON_PERSISTED_TREE
+#endif
 
 #if IDA_SDK_VERSION < 920
   #define MY_DECLARE_LISTENER(name) static ssize_t idaapi name(void *ud, int ncode, va_list va)
@@ -125,7 +133,7 @@ template <typename T> bool safe_advance(T & iter, const T & end, uval_t count)
 	{
 		if (iter == end)
 			return false;
-		iter++;		
+		iter++;
 	}
 	if (iter == end)
 			return false;
@@ -162,6 +170,15 @@ qstring good_udm_name(const tinfo_t &struc, uint64 offInBits, const char *format
 #if IDA_SDK_VERSION < 850
 qstring good_smember_name(const struc_t* sptr, ea_t offset, const char *format, ...);
 #endif
+void mk_name_w(qstring& name);
+bool get_class_name(const char* fullName, qstring *classname);
+
+qstring gen_disasm(ea_t ea, asize_t len);
+void add_patch_cmt(ea_t ea, asize_t patchLen);
+asize_t extraSpaceForPatch(ea_t ea);
+void patch_nops(ea_t ea, uval_t len);
+bool patch_jmp(ea_t from, ea_t to, asize_t maxLen);
+bool patch_cond_jmp(ea_t ea, mcode_t op, ea_t trueDest, ea_t falseDest, asize_t maxLen);
 
 void patch_str(ea_t ea, const char *str, sval_t len, bool forceZeroTerm = false);
 void patch_wstr(ea_t ea, const char *str, sval_t len);

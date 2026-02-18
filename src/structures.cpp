@@ -124,7 +124,7 @@ asize_t struct_get_member(tid_t strId, asize_t offset, tid_t* last_member, tidve
 		}
 	}
 
-	member_t * member = get_member(str, offset);	
+	member_t * member = get_member(str, offset);
 	if (!member)
 		return offset + adjust;
 	*last_member = member->id;
@@ -216,7 +216,7 @@ asize_t struct_get_member(tid_t strId, asize_t offset, tid_t* last_member, tidve
 #endif //IDA_SDK_VERSION < 850
 
 bool struct_has_member(tid_t strId, asize_t offset)
-{	
+{
 	tid_t last_member = BADNODE;
 	return struct_get_member(strId, offset, &last_member) == 0 && last_member != BADNODE;
 }
@@ -378,7 +378,7 @@ int which_struct_matches_here(uval_t idx1, uval_t begin, uval_t end)
 		return 0;
 
 	asize_t size = last + get_member_size(get_member(struc, last)) - begin;
-	matched_structs_t m;	
+	matched_structs_t m;
 	for(uval_t idx = get_first_struc_idx(); idx!=BADNODE; idx=get_next_struc_idx(idx)) {
 		tid_t id = get_struc_by_idx(idx);
 		struc_t * struc_candidate = get_struc(id);
@@ -391,7 +391,7 @@ int which_struct_matches_here(uval_t idx1, uval_t begin, uval_t end)
 		if(compare_structs(struc, begin, struc_candidate))
 			m.list.push_back(id);
 	}
-	ssize_t choosed = m.choose();	
+	ssize_t choosed = m.choose();
 	if(choosed >= 0)
 		open_structs_window(m.list[choosed], 0);
 	return 0;
@@ -429,9 +429,9 @@ int unpack_this_member(uval_t idx, uval_t offset)
 			opinfo_t mt;
 			retrieve_member_info(&mt, member);
 
-			asize_t size = get_member_size(member);			
+			asize_t size = get_member_size(member);
 			add_struc_member(struc, name.c_str(), off + delta, member->flag, &mt, size);
-			
+
 			tinfo_t type;
 			if(get_or_guess_member_tinfo(&type, member))
 			{
@@ -773,7 +773,7 @@ tid_t create_VT_struc(ea_t VT_ea, const char * basename, uval_t idx /*= BADADDR*
 	return newid;
 }
 
-int create_VT(tid_t parent, ea_t VT_ea, bool autoScan/*= false*/)
+int create_VT(tid_t parent, ea_t VT_ea, bool autoScan/*= false*/, const char *topStructName /*= nullptr*/)
 {
 	qstring name;
 	uval_t vtstruc_idx = 0;
@@ -803,8 +803,13 @@ int create_VT(tid_t parent, ea_t VT_ea, bool autoScan/*= false*/)
 		return 0;
 	}
 
-	tid_t mtid = BADADDR;
+	// vtblType is a type of the fist member of the parent struct
+	// there is may be:
+	// - an arbitrary type, when the first vtbl is adding
+	// - already added vtable, when adding second
+	// - union of already added vtables, when adding third and more
 	tinfo_t vtblType;
+	tid_t mtid = BADADDR;
 	eavec_t eav;
 #if IDA_SDK_VERSION < 850
 	member_t* vtbl = get_member(struc, 0);
@@ -831,6 +836,12 @@ int create_VT(tid_t parent, ea_t VT_ea, bool autoScan/*= false*/)
 		}
 	}
 
+	// use topmost struct name on adding vtables of derived classes
+	// left name_VT as base class union name
+	if(topStructName && *topStructName && eav.size() > 0) {
+		name = topStructName;
+	}
+
 	tid_t vt_struc_id = create_VT_struc(VT_ea, name.c_str(), vtstruc_idx, NULL, autoScan);
 	if(vt_struc_id == BADADDR)
 		return 0;
@@ -855,7 +866,7 @@ int create_VT(tid_t parent, ea_t VT_ea, bool autoScan/*= false*/)
 				else
 					udm.type = type_by_tid(vt_struc_id);
 				if(udm.type.get_type_name(&udm.name))
-					udm.name.append('_');
+					udm.name.append('_'); //be careful, exactly this name is used in vtbl_locator_t::selectVT()
 				else
 					udm.name.cat_sprnt("VT_%a", i == 0 ? eav.front(): VT_ea);
 				size_t sz = udm.type.get_size();
@@ -876,7 +887,7 @@ int create_VT(tid_t parent, ea_t VT_ea, bool autoScan/*= false*/)
 			tinfo_code_t err = utype.set_numbered_type(nullptr, ord, 0, utname.c_str());
 			if (err == TERR_OK) {
 #if IDA_SDK_VERSION < 850
-				import_type(get_idati(), vtstruc_idx, utname.c_str());
+				import_type(get_idati(), (int)vtstruc_idx, utname.c_str());
 				smt_code_t e = set_member_tinfo(struc, vtbl, 0, make_pointer(utype), 0);
 				if(e < SMT_OK) {
 					Log(llError, "save or set union VTBLs type error %d on set_member_tinfo\n", e);
@@ -943,19 +954,37 @@ int create_VT(tid_t parent, ea_t VT_ea, bool autoScan/*= false*/)
 		Log(llError, "adding to union VTBLs type error %d %s\n", err, tinfo_errstr(err));
 		return 0;
 	}
-	
+
 	//create or update first VTBL
 	tinfo_t type = type_by_tid(vt_struc_id);
 	add_vt_member(struc, 0, VTBL_MEMNAME, make_pointer(type), VT_ea);
 	return 1;
 }
 
-void auto_create_vtbls(cfunc_t *cfunc)
+// returns derivedClassThis in expressions like:
+// derivedClassThis->baseClass2.baseClass1.baseClassMember
+// derivedClassThis.baseClass2.baseClass1.baseClassMember
+bool topClassThis(cexpr_t** e)
 {
-	struct ida_local vtbl_assign_locator_t : public ctree_visitor_t
+	bool res = false;
+	while((*e)->op == cot_memref && (*e)->m == 0) {
+		*e = (*e)->x;
+		res = true;
+	}
+	if((*e)->op == cot_memptr && (*e)->m == 0) {
+		(*e) = (*e)->x;
+		res = true;
+	}
+	return res;
+}
+
+void auto_vtbls(cfunc_t *cfunc)
+{
+	struct ida_local vtbl_locator_t : public ctree_visitor_t
 	{
-		vtbl_assign_locator_t(): ctree_visitor_t(CV_FAST){}
-		int idaapi visit_expr(cexpr_t * asg)
+		cfunc_t *func;
+		vtbl_locator_t(cfunc_t *cfunc): ctree_visitor_t(CV_FAST), func(cfunc){}
+		int assignVT(cexpr_t * asg)
 		{
 			if(asg->op != cot_asg)
 				return 0;
@@ -996,12 +1025,114 @@ void auto_create_vtbls(cfunc_t *cfunc)
 			if(tid == BADADDR)
 				return 0; //classType.force_tid()
 
-			create_VT(tid, vtea, true);
+			qstring topName;
+			cexpr_t *membacc = left->x;
+			cexpr_t *top = nullptr;
+			while ((membacc->op == cot_memptr || membacc->op == cot_memref) && membacc->m == 0) {
+				top = membacc;
+				membacc = membacc->x;
+			}
+			if(top) {
+				tinfo_t topXType = top->x->type;
+				topXType.remove_ptr_or_array();
+				if(topXType.is_struct() && topXType.get_type_name(&topName))
+					Log(llDebug, "%a: Top struct name for create_VT: %s\n", asg->ea, topName.c_str());
+			}
+
+			create_VT(tid, vtea, true, topName.c_str());
 			return 0; // ignore type changes (?)
 			//return create_VT(tid, vtea, true);
 		}
+		int selectVT(cexpr_t *call)
+		{
+			if(call->op != cot_call)
+				return 0;
+			cexpr_t *method = skipCast(call->x);
+			if(method->op != cot_memref)
+				return 0;
+			cexpr_t *vtbl = method->x;
+			if(vtbl->op != cot_memptr)
+				return 0;
+			cexpr_t *vtUnion = vtbl->x;
+			if(vtUnion->op != cot_memref)
+				return 0;
+			tinfo_t unionType = vtUnion->type.get_pointed_object();
+			if(!unionType.is_union())
+				return 0;
+			intvec_t path;
+			if(func->get_user_union_selection(vtbl->ea, &path)) {
+				Log(llDebug, "%a selectVT: skip user selected union member\n", call->ea);
+				return 0;
+			}
+			cexpr_t* thisExpr = vtUnion->x;
+			if(!topClassThis(&thisExpr)) {
+				Log(llWarning, "%a selectVT: no 'this' found, direct vtbl usage?\n", call->ea);
+				return 0;
+			}
+			qstring vtblName;
+			tinfo_t thisExprType = remove_pointer(thisExpr->type);
+			if(!thisExprType.is_struct() || !thisExprType.get_type_name(&vtblName)) {
+				Log(llWarning, "%a selectVT: not named struct???\n", call->ea);
+				return 0;
+			}
+			vtblName += VTBL_SUFFIX "_"; //exactly this name should be set in create_VT()
+			udm_t m;
+			m.name = vtblName;
+			int midx = unionType.find_udm(&m, STRMEM_NAME);
+			if(midx < 0 || static_cast<decltype(vtbl->m)>(midx) == vtbl->m) {// not found or nothing to change
+				Log(llDebug, "%a selectVT: %s %s\n", call->ea, vtblName.c_str(), midx < 0 ? "not found" : "already selected");
+				return 0;
+			}
+			// dynamically change (don't save selection) vtbl union member and type of expression
+			vtbl->m = midx;
+			vtbl->type = m.type;
+
+			m.offset = method->m;
+			if(vtbl->type.find_udm(&m, STRMEM_AUTO) >= 0) {
+				tinfo_t ftype = remove_pointer(m.type);
+				if(ftype.is_func()) {
+					method->type = m.type;
+					if(!(call->a->flags & CFL_FINAL))
+						call->a->functype = ftype;
+
+					// fix 'this' argument of the call has been previously set to base class
+					if(call->a->size()) {
+						carg_t &arg0 = call->a->at(0);
+						func_type_data_t fti;
+						if(ftype.get_func_details(&fti, GTD_NO_ARGLOCS) && fti.size() && arg0.type != fti.at(0).type) {
+#if 1
+							//check if `this` argument matches pattern `&derivedClassThis->baseClass2.baseClass1.baseClass0`, and replace it with `derived`
+							cexpr_t* thisExp = arg0.x;
+							if(arg0.op == cot_ref && topClassThis(&thisExp)) {
+								arg0.consume_cexpr(new cexpr_t(*thisExp));
+#else
+							// or simply replace it to thisExpr has been found before
+							if(thisExpr->type == fti.at(0).type) {
+								arg0.consume_cexpr(new cexpr_t(*thisExpr));
+#endif
+							} else {
+#if IDA_SDK_VERSION > 820
+								Log(llDebug, "%a selectVT: arg0 %s %s must be %s, thisExpr %s %s\n", call->ea, arg0.type.dstr(), arg0.dstr(), fti.at(0).type.dstr(), thisExpr->type.dstr(), thisExpr->dstr());
+#endif // IDA_SDK_VERSION > 820
+							}
+						}
+					}
+				}
+			}
+
+			Log(llNotice, "%a: auto-selected VT: %s\n", call->ea, vtblName.c_str());
+			return 0; // recalc_parent_types does not help
+		}
+		int idaapi visit_expr(cexpr_t *e)
+		{
+			if(e->op == cot_asg)
+				return assignVT(e);
+			if(e->op == cot_call)
+				return selectVT(e);
+			return 0;
+		}
 	};
-	vtbl_assign_locator_t l;
+	vtbl_locator_t l(cfunc);
 	l.apply_to_exprs(&cfunc->body, nullptr);
 }
 
